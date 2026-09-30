@@ -51,16 +51,16 @@ func (s *Service) AddRevision(
 	ctx context.Context,
 	planID string,
 	input domain.RevisionCreateInput,
-) (domain.ZoneRevision, error) {
+) (domain.RevisionAppendResult, error) {
 	normalized, err := domain.NormalizeRevisionInput(input)
 	if err != nil {
-		return domain.ZoneRevision{}, err
+		return domain.RevisionAppendResult{}, err
 	}
 	if err := domain.ValidateRevisionInput(normalized); err != nil {
-		return domain.ZoneRevision{}, err
+		return domain.RevisionAppendResult{}, err
 	}
 	now := s.clock.Now().UTC()
-	var created domain.ZoneRevision
+	var result domain.RevisionAppendResult
 	err = s.store.Write(ctx, func(state *domain.State) error {
 		plan, ok := state.Plans[planID]
 		if !ok {
@@ -72,24 +72,36 @@ func (s *Service) AddRevision(
 				"state":   plan.State,
 			})
 		}
+		var predecessor *domain.ZoneRevision
+		duplicateSerial := false
 		for _, revision := range state.Revisions {
 			if revision.PlanID != planID {
 				continue
 			}
 			if revision.Serial == normalized.Serial {
-				return domain.NewError(domain.CodeDuplicateRevision, "plan already contains this serial", map[string]any{
-					"plan_id": planID,
-					"serial":  normalized.Serial,
-				})
+				duplicateSerial = true
 			}
-			if revision.Serial > normalized.Serial {
-				return domain.Validation("revision serial must increase", map[string]any{
-					"serial": normalized.Serial,
-					"latest": revision.Serial,
-				})
+			if predecessor == nil || revision.Serial > predecessor.Serial {
+				candidate := revision
+				predecessor = &candidate
 			}
 		}
-		created = domain.ZoneRevision{
+		// Map iteration order is random, so classify after the scan: an exact
+		// serial always stays duplicate_revision, and only a serial below the
+		// current maximum is reported as non-increasing.
+		if duplicateSerial {
+			return domain.NewError(domain.CodeDuplicateRevision, "plan already contains this serial", map[string]any{
+				"plan_id": planID,
+				"serial":  normalized.Serial,
+			})
+		}
+		if predecessor != nil && predecessor.Serial > normalized.Serial {
+			return domain.Validation("revision serial must increase", map[string]any{
+				"serial": normalized.Serial,
+				"latest": predecessor.Serial,
+			})
+		}
+		created := domain.ZoneRevision{
 			ID:         s.ids.New("rev"),
 			PlanID:     planID,
 			Serial:     normalized.Serial,
@@ -106,9 +118,21 @@ func (s *Service) AddRevision(
 			"plan_id": planID,
 			"serial":  created.Serial,
 		})
+		// Build the result inside this commit against the exact immutable
+		// predecessor snapshot: a follow-up "latest" read could already observe
+		// a later append from another writer.
+		result = domain.RevisionAppendResult{
+			ZoneRevision:       created,
+			ContentFingerprint: domain.RevisionContentFingerprint(created),
+			DiffSummary:        domain.BuildRevisionDiffSummary(created, predecessor),
+		}
 		return nil
 	})
-	return created, err
+	if err != nil {
+		// Failed appends never carry a diff summary.
+		return domain.RevisionAppendResult{}, err
+	}
+	return result, nil
 }
 
 func (s *Service) Activate(

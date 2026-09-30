@@ -79,31 +79,11 @@ func (h *harness) close() {
 }
 
 func (h *harness) call(method string, path string, requestBody any, target any) error {
-	var payload []byte
-	var err error
-	if requestBody != nil {
-		payload, err = json.Marshal(requestBody)
-		if err != nil {
-			return fmt.Errorf("encode request: %w", err)
-		}
-	}
-	request, err := http.NewRequest(method, h.baseURL+path, bytes.NewReader(payload))
+	status, body, err := h.roundTrip(method, path, requestBody)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return err
 	}
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	response, err := h.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("perform request: %w", err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if status < 200 || status >= 300 {
 		var failure struct {
 			Error struct {
 				Code    string `json:"code"`
@@ -114,7 +94,7 @@ func (h *harness) call(method string, path string, requestBody any, target any) 
 			return fmt.Errorf("decode error response: %w", err)
 		}
 		return &apiFailure{
-			Status:  response.StatusCode,
+			Status:  status,
 			Code:    failure.Error.Code,
 			Message: failure.Error.Message,
 		}
@@ -132,4 +112,32 @@ func (h *harness) call(method string, path string, requestBody any, target any) 
 		return fmt.Errorf("decode response data: %w", err)
 	}
 	return nil
+}
+
+func (h *harness) roundTrip(method string, path string, requestBody any) (int, []byte, error) {
+	var payload []byte
+	var err error
+	if requestBody != nil {
+		payload, err = json.Marshal(requestBody)
+		if err != nil {
+			return 0, nil, fmt.Errorf("encode request: %w", err)
+		}
+	}
+	request, err := http.NewRequest(method, h.baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return 0, nil, fmt.Errorf("create request: %w", err)
+	}
+	if requestBody != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := h.client.Do(request)
+	if err != nil {
+		return 0, nil, fmt.Errorf("perform request: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if err != nil {
+		return 0, nil, fmt.Errorf("read response: %w", err)
+	}
+	return response.StatusCode, body, nil
 }

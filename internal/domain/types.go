@@ -58,6 +58,57 @@ type ZoneRevision struct {
 	CreatedAt  time.Time   `json:"created_at"`
 }
 
+// RevisionDiffSource identifies what a revision diff was calculated against.
+type RevisionDiffSource string
+
+const (
+	// RevisionDiffBaseline marks the first revision of a plan, which has no predecessor.
+	RevisionDiffBaseline RevisionDiffSource = "baseline"
+	// RevisionDiffPrevious marks a diff calculated against the preceding revision.
+	RevisionDiffPrevious RevisionDiffSource = "previous_revision"
+)
+
+// RevisionEntryChange describes one entry that differs between two revisions.
+// Added changes only carry the new value, removed changes only carry the old
+// value, and modified changes carry both.
+type RevisionEntryChange struct {
+	Owner    string    `json:"owner"`
+	Type     EntryType `json:"type"`
+	OldValue string    `json:"old_value,omitempty"`
+	NewValue string    `json:"new_value,omitempty"`
+}
+
+// RevisionDiffSummary is the deterministic content diff of a revision against
+// the baseline marker or the immediately preceding revision in the same plan.
+type RevisionDiffSummary struct {
+	RevisionID    string                `json:"revision_id"`
+	Serial        uint32                `json:"serial"`
+	Source        RevisionDiffSource    `json:"source"`
+	BaseRevision  *RevisionDiffBase     `json:"base_revision,omitempty"`
+	AddedCount    int                   `json:"added_count"`
+	ModifiedCount int                   `json:"modified_count"`
+	RemovedCount  int                   `json:"removed_count"`
+	Added         []RevisionEntryChange `json:"added"`
+	Modified      []RevisionEntryChange `json:"modified"`
+	Removed       []RevisionEntryChange `json:"removed"`
+}
+
+// RevisionDiffBase references the immutable predecessor a diff was based on.
+type RevisionDiffBase struct {
+	RevisionID         string `json:"revision_id"`
+	Serial             uint32 `json:"serial"`
+	ContentFingerprint string `json:"content_fingerprint"`
+}
+
+// RevisionAppendResult is the commit result of appending one revision. It keeps
+// every original revision field at the top level for compatibility and adds the
+// new revision's content fingerprint together with its deterministic diff.
+type RevisionAppendResult struct {
+	ZoneRevision
+	ContentFingerprint string              `json:"content_fingerprint"`
+	DiffSummary        RevisionDiffSummary `json:"diff_summary"`
+}
+
 type RolloutPlan struct {
 	ID                  string     `json:"id"`
 	Zone                string     `json:"zone"`
