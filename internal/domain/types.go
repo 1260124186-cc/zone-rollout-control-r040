@@ -58,6 +58,37 @@ type ZoneRevision struct {
 	CreatedAt  time.Time   `json:"created_at"`
 }
 
+type RevisionChangeKind string
+
+const (
+	RevisionChangeAdded   RevisionChangeKind = "added"
+	RevisionChangeChanged RevisionChangeKind = "changed"
+	RevisionChangeRemoved RevisionChangeKind = "removed"
+)
+
+type RevisionEntryChange struct {
+	Kind   RevisionChangeKind `json:"kind"`
+	Owner  string             `json:"owner"`
+	Type   EntryType          `json:"type"`
+	Before string             `json:"before,omitempty"`
+	After  string             `json:"after,omitempty"`
+}
+
+type RevisionDiffSummary struct {
+	PreviousRevisionID string                `json:"previous_revision_id,omitempty"`
+	PreviousSerial     uint32                `json:"previous_serial,omitempty"`
+	Baseline           bool                  `json:"baseline"`
+	Added              []RevisionEntryChange `json:"added"`
+	Changed            []RevisionEntryChange `json:"changed"`
+	Removed            []RevisionEntryChange `json:"removed"`
+}
+
+type RevisionAppendResult struct {
+	ZoneRevision
+	ContentFingerprint string              `json:"content_fingerprint"`
+	Diff               RevisionDiffSummary `json:"diff"`
+}
+
 type RolloutPlan struct {
 	ID                  string     `json:"id"`
 	Zone                string     `json:"zone"`

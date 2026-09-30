@@ -51,16 +51,20 @@ func (s *Service) AddRevision(
 	ctx context.Context,
 	planID string,
 	input domain.RevisionCreateInput,
-) (domain.ZoneRevision, error) {
+) (domain.RevisionAppendResult, error) {
 	normalized, err := domain.NormalizeRevisionInput(input)
 	if err != nil {
-		return domain.ZoneRevision{}, err
+		return domain.RevisionAppendResult{}, err
 	}
 	if err := domain.ValidateRevisionInput(normalized); err != nil {
-		return domain.ZoneRevision{}, err
+		return domain.RevisionAppendResult{}, err
 	}
 	now := s.clock.Now().UTC()
 	var created domain.ZoneRevision
+	// Captured from inside the transaction, before the new revision is
+	// written, so the summary always compares against the revision that was
+	// latest at commit time — never a later read of "current" state.
+	var previous *domain.ZoneRevision
 	err = s.store.Write(ctx, func(state *domain.State) error {
 		plan, ok := state.Plans[planID]
 		if !ok {
@@ -89,6 +93,7 @@ func (s *Service) AddRevision(
 				})
 			}
 		}
+		previous = latestRevisionOf(state, planID)
 		created = domain.ZoneRevision{
 			ID:         s.ids.New("rev"),
 			PlanID:     planID,
@@ -108,7 +113,31 @@ func (s *Service) AddRevision(
 		})
 		return nil
 	})
-	return created, err
+	if err != nil {
+		// A failed append produces no revision and no diff summary.
+		return domain.RevisionAppendResult{}, err
+	}
+	return domain.RevisionAppendResult{
+		ZoneRevision:       created,
+		ContentFingerprint: domain.RevisionContentFingerprint(created),
+		Diff:               domain.DiffRevisions(previous, created),
+	}, nil
+}
+
+// latestRevisionOf returns a pointer to the revision with the highest serial
+// for the plan inside the in-transaction state, or nil for the first append.
+func latestRevisionOf(state *domain.State, planID string) *domain.ZoneRevision {
+	var latest *domain.ZoneRevision
+	for _, revision := range state.Revisions {
+		if revision.PlanID != planID {
+			continue
+		}
+		if latest == nil || revision.Serial > latest.Serial {
+			candidate := revision
+			latest = &candidate
+		}
+	}
+	return latest
 }
 
 func (s *Service) Activate(
